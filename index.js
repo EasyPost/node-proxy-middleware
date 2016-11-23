@@ -4,6 +4,7 @@ const http = require('http');
 const https = require('https');
 const EventEmitter = require('events');
 const URL = require('url');
+const zlib = require('zlib');
 
 const owns = {}.hasOwnProperty;
 
@@ -60,6 +61,30 @@ function isRedirectCode(code) {
   return code === 201 || parseInt(code / 100, 10) === 3;
 }
 
+function waitForDeflate(req) {
+  req.on('data', (chunk) => {
+    req.rawBody.push(chunk);
+
+    if (req.headers['content-encoding'] === 'gzip') {
+      req.wait = new Promise(res => {
+        zlib.unzip(Buffer.concat(req.rawBody), {
+          finishFlush: zlib.Z_SYNC_FLUSH
+        }, (err, buffer) => {
+          if (!err) {
+            req.body = buffer.toString();
+          } else {
+            console.log(err, req.rawBody, req.headers['content-encoding']);
+            res();
+          }
+          res();
+        });
+      });
+    } else {
+      req.body = req.rawBody.join('');
+    }
+  });
+}
+
 function createMiddleware(request, options) {
   const emitter = new EventEmitter();
 
@@ -67,9 +92,10 @@ function createMiddleware(request, options) {
   const middleware = (req, resp, next) => {
     let url = req.url;
 
+    req.wait = Promise.resolve();
     req.body = ''
-    req.on('data', (chunk) => { req.body += chunk.toString(); });
-
+    req.rawBody = [];
+    waitForDeflate(req);
 
     //  You can pass the route within the options, as well
     if (typeof options.route === 'string') {
@@ -127,31 +153,36 @@ function createMiddleware(request, options) {
 
         resp.writeHead(myRes.statusCode, myRes.headers);
 
-        myRes.body = ''
-        myRes.on('data', (chunk ) => {
-          myRes.body += chunk.toString();
-        });
-
-        myRes.req.body = req.body;
+        myRes.rawBody = [];
+        myRes.body = '';
+        myRes.wait = Promise.resolve();
+        waitForDeflate(myRes);
 
         myRes.on('error', (err) => {
-          emitter.emit('error', err);
-          next();
+          Promise.all([req.wait, myRes.wait]).then(() => {
+            myRes.req.body = req.body;
+            emitter.emit('error', err);
+            next();
+          });
         });
 
         myRes.on('end', () => {
-          if (statusCode > 300) {
-            emitter.emit('error', myRes);
-          } else {
-            emitter.emit('end', myRes);
-          }
-          next();
+          Promise.all([req.wait, myRes.wait]).then(() => {
+            myRes.req.body = req.body;
+            if (statusCode > 300) {
+              emitter.emit('error', myRes);
+            } else {
+              emitter.emit('end', myRes);
+            }
+            next();
+          });
         });
 
         myRes.pipe(resp);
       });
 
       myReq.on('error', (err) => {
+        myRes.req.body = req.body;
         emitter.emit('error', err);
         return next();
       });
