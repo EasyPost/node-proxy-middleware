@@ -182,7 +182,9 @@ function createMiddleware(request, options) {
       });
 
       myReq.on('error', (err) => {
-        myRes.req.body = req.body;
+        if (typeof myRes !== 'undefined') {
+          myRes.req.body = req.body;
+        }
         emitter.emit('error', err);
         return next();
       });
