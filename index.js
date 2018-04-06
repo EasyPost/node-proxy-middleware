@@ -149,7 +149,7 @@ function createMiddleware(request, options) {
         myRes.headers = applyViaHeader(myRes.headers, opts);
 
         /* eslint no-param-reassign: 0 */
-        myRes.headers['set-cookie'] = rewriteCookieHosts(myRes.headers, opts, req);
+        myRes.headers['set-cookie'] = rewriteCookieHosts(myRes.headers, opts, req) || '';
 
         resp.writeHead(myRes.statusCode, myRes.headers);
 
